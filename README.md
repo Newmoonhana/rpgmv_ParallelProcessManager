@@ -1,13 +1,12 @@
 RPG MV의 병렬 이벤트의 세부 관리 및 최적화를 지원하는 플러그인
 
-
  * (1) 병렬 처리 이벤트 최적화 - 1프레임마다 이벤트 호출 -> n프레임마다 이벤트 호출 (딜레이 커스텀 가능)
  * ㅁ 특정 맵 이벤트 딜레이 커스텀
  *  - <ParallelDelay:해당 이벤트의 딜레이 타임 or 딜레이 타임들>
- *  - - ex 1) <ParallelDelay:60>
- *  - - ex 2) <ParallelDelay:60,22,16>  // 모든 IsParallelFrame에서 사용하는 딜레이 타임들
+ *   - ex 1) <ParallelDelay:60>
+ *   - ex 2) <ParallelDelay:60,22,16>  // 모든 IsParallelFrame에서 사용하는 딜레이 타임들
  * ㅁ 특정 공통 이벤트 딜레이 커스텀
  *  - CommonEventDelays 파라미터에 '공동 이벤트 / 딜레이 타임 or 딜레이 타임들' 등록
  * ㅁ n프레임마다 실행할 특정 이벤트 코드 커스텀
  *  - (이벤트 페이지 내 현재 프레임 카운트 반환 함수(조건식으로 사용) 방식)
- *  - - ex ) 조건분기 → 스크립트 → NMHN.PPM.isParallelFrame(this, 60)
+ *   - ex ) 조건분기 → 스크립트 → NMHN.PPM.isParallelFrame(this, 60)
