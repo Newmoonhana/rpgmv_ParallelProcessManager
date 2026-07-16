@@ -2,6 +2,9 @@
 // NMHN_ParallelProcessM.js
 //=============================================================================
 
+var NMHN = NMHN || {};
+NMHN.PPM = NMHN.PPM || {};
+
 /*:ko
  * @plugindesc 병렬 처리 이벤트 매니저
  * @author 뉴문하나
@@ -68,11 +71,8 @@
  * @type string
  * @desc 프레임 딜레이. 여러 개 입력 시 콤마로 구분(최대공약수 적용) ex) 60,22,16
  * @default 10
+ * @min 0
  */
-
-
-var NMHN = NMHN || {};
-NMHN.PPM = NMHN.PPM || {};
 
 (function () {
     function gcd(a, b) {    //최대공약수
@@ -85,6 +85,38 @@ NMHN.PPM = NMHN.PPM || {};
     var Params = PluginManager.parameters('NMHN_ParallelProcessM');
     NMHN.PPM.eventUpdateDelay = JSON.parse(Params['Event Update Delay']);
 
+    // =========================================================================
+    // 유틸
+    // =========================================================================
+    // 딜레이 문자열 파싱
+    // 콤마로 구분된 숫자 문자열을 처리하여 딜레이 값 계산
+    // - 숫자가 하나도 없으면 null (호출부에서 폴백값 적용)
+    // - 전부 0이면 명시적 0 반환 (매 프레임 실행 의도로 인정)
+    // - 0을 제외한 양수가 있으면 그것들의 gcd 반환
+    NMHN.PPM.parseDelayNums = function(str) {
+        if (str === undefined || str === null || str === '') return null;
+
+        const rawNums = String(str)
+            .split(',')
+            .map(s => Number(s.trim()))
+            .filter(n => !isNaN(n) && n >= 0);
+
+        if (rawNums.length === 0) return null;
+
+        const positives = rawNums.filter(n => n > 0);
+        if (positives.length === 0) return 0;
+
+        return positives.reduce((a, b) => gcd(a, b));
+    };
+    // 맵 이벤트 노트 파싱
+    // ex 1) <ParallelDelay:60>
+    // ex 2) <ParallelDelay:60,22,16>
+    NMHN.PPM.parseDelayTag = function(note) {
+        if (!note) return null;
+        const match = String(note).match(/<ParallelDelay:\s*([\d,\s]+)>/i);
+        if (!match) return null;
+        return NMHN.PPM.parseDelayNums(match[1]);
+    };
     // 공통 이벤트별 딜레이 맵(map 파일 말고 자료구조 map) 구성
     NMHN.PPM.commonEventDelayMap = {};
     (function() {
@@ -92,18 +124,11 @@ NMHN.PPM = NMHN.PPM || {};
         rawList.forEach(function(str) {
             const obj = JSON.parse(str);
             const id = Number(obj.commonEventId);
-            const nums = String(obj.delays)
-                .split(',')
-                .map(s => Number(s.trim()))
-                .filter(n => !isNaN(n) && n > 0);
-            NMHN.PPM.commonEventDelayMap[id] = nums.length > 0
-                ? nums.reduce((a, b) => gcd(a, b))
-                : NMHN.PPM.eventUpdateDelay;
+            const parsed = NMHN.PPM.parseDelayNums(obj.delays);
+            NMHN.PPM.commonEventDelayMap[id] = parsed !== null ? parsed : NMHN.PPM.eventUpdateDelay;
         });
     })();
-    // =========================================================================
-    // 유틸
-    // =========================================================================
+
     // 업데이트 딜레이 - 현재 프레임 체크
     Game_Event.prototype.isParallelFrame = function(n) {
         return this._parallelFrameCount % n === 0;
@@ -131,7 +156,7 @@ NMHN.PPM = NMHN.PPM || {};
         this._parallelFrameCount = 0;
     };
 
-    // 이벤트 페이지 마지막에 대기 이벤트 추가 or 조건분기 괄호 닫기 직전 대기 이벤트 추가
+    // 이벤트 페이지 마지막에 대기 이벤트 추가
     NMHN.PPM.Game_Event_updateParallel = Game_Event.prototype.updateParallel;
     Game_Event.prototype.updateParallel = function() {
         if (this._interpreter) {
@@ -154,22 +179,11 @@ NMHN.PPM = NMHN.PPM || {};
         return list;
     };
 
-    // 이벤트 노트 파싱
-    // ex 1) <ParallelDelay:60>
-    // ex 2) <ParallelDelay:60,22,16>
     Game_Event.prototype.parallelDelay = function() {
         if (this._parallelDelay === undefined) {
             const note = this.event().note || '';
-            const match = note.match(/<ParallelDelay:\s*([\d,\s]+)>/i);
-            if (match) {
-                const nums = match[1]
-                    .split(',')
-                    .map(s => Number(s.trim()))
-                    .filter(n => !isNaN(n) && n > 0);
-                this._parallelDelay = nums.length > 0 ? nums.reduce((a, b) => gcd(a, b)) : NMHN.PPM.eventUpdateDelay;
-            } else {
-                this._parallelDelay = NMHN.PPM.eventUpdateDelay;
-            }
+            const parsed = NMHN.PPM.parseDelayTag(note);
+            this._parallelDelay = parsed !== null ? parsed : NMHN.PPM.eventUpdateDelay;
         }
         return this._parallelDelay;
     };
@@ -198,13 +212,15 @@ NMHN.PPM = NMHN.PPM || {};
     NMHN.PPM.Game_CommonEvent_list = Game_CommonEvent.prototype.list;
     Game_CommonEvent.prototype.list = function() {
         const delay = this.parallelDelay();
-        if (delay <= 0) {
+        if (delay < 0) {
             return NMHN.PPM.Game_CommonEvent_list.call(this);
         }
-        this._parallelFrameCount += delay;
+        
         if (this._interpreter) {
             this._interpreter._parallelCommonEvent = this;
         }
+        this._parallelFrameCount += delay > 0 ? delay : 1;
+
         const list = NMHN.PPM.Game_CommonEvent_list.call(this);
         const waitCommand = { code: 230, indent: 0, parameters: [delay] };
         return list.concat([waitCommand]);
