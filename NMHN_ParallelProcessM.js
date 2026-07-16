@@ -73,26 +73,51 @@ var NMHN = NMHN || {};
 NMHN.PPM = NMHN.PPM || {};
 
 (function () {
+    function gcd(a, b) {    //최대공약수
+        return b === 0 ? a : gcd(b, a % b);
+    }
+
     //=============================================================================
     // Parameter Variables
     //=============================================================================
     var Params = PluginManager.parameters('NMHN_ParallelProcessM');
     NMHN.PPM.eventUpdateDelay = JSON.parse(Params['Event Update Delay']);
 
+    // 공통 이벤트별 딜레이 맵(map 파일 말고 자료구조 map) 구성
+    NMHN.PPM.commonEventDelayMap = {};
+    (function() {
+        const rawList = JSON.parse(Params['CommonEventDelays'] || '[]');
+        rawList.forEach(function(str) {
+            const obj = JSON.parse(str);
+            const id = Number(obj.commonEventId);
+            const nums = String(obj.delays)
+                .split(',')
+                .map(s => Number(s.trim()))
+                .filter(n => !isNaN(n) && n > 0);
+            NMHN.PPM.commonEventDelayMap[id] = nums.length > 0
+                ? nums.reduce((a, b) => gcd(a, b))
+                : NMHN.PPM.eventUpdateDelay;
+        });
+    })();
     // =========================================================================
     // 유틸
     // =========================================================================
-    function gcd(a, b) {    //최대공약수
-        return b === 0 ? a : gcd(b, a % b);
-    }
-
     // 업데이트 딜레이 - 현재 프레임 체크
     Game_Event.prototype.isParallelFrame = function(n) {
         return this._parallelFrameCount % n === 0;
     };
     NMHN.PPM.isParallelFrame = function(interpreter, n) {
-        const event = $gameMap.event(interpreter._eventId);
+        const event = $gameMap.event(interpreter._eventId) || interpreter._parallelCommonEvent;
         return event ? event.isParallelFrame(n) : false;
+    };
+
+    // 공통 이벤트 호출(자식 인터프리터) 시에도 소유자 참조가 이어지도록 전파
+    const _Game_Interpreter_setupChild = Game_Interpreter.prototype.setupChild;
+    Game_Interpreter.prototype.setupChild = function(list, eventId) {
+        _Game_Interpreter_setupChild.call(this, list, eventId);
+        if (this._parallelCommonEvent) {
+            this._childInterpreter._parallelCommonEvent = this._parallelCommonEvent;
+        }
     };
     
     // =========================================================================
@@ -150,5 +175,36 @@ NMHN.PPM = NMHN.PPM || {};
     // =========================================================================
     // 공통 이벤트 병렬 이벤트 업데이트 딜레이
     // =========================================================================
-    
+    const _Game_CommonEvent_initialize = Game_CommonEvent.prototype.initialize;
+    Game_CommonEvent.prototype.initialize = function(commonEventId) {
+        this._parallelFrameCount = 0;
+        _Game_CommonEvent_initialize.call(this, commonEventId);
+    };
+
+    Game_CommonEvent.prototype.isParallelFrame = function(n) {
+        return this._parallelFrameCount % n === 0;
+    };
+
+    Game_CommonEvent.prototype.parallelDelay = function() {
+        if (this._parallelDelay === undefined) {
+            const mapped = NMHN.PPM.commonEventDelayMap[this._commonEventId];
+            this._parallelDelay = mapped !== undefined ? mapped : NMHN.PPM.eventUpdateDelay;
+        }
+        return this._parallelDelay;
+    };
+
+    NMHN.PPM.Game_CommonEvent_list = Game_CommonEvent.prototype.list;
+    Game_CommonEvent.prototype.list = function() {
+        const delay = this.parallelDelay();
+        if (delay <= 0) {
+            return NMHN.PPM.Game_CommonEvent_list.call(this);
+        }
+        this._parallelFrameCount += delay;
+        if (this._interpreter) {
+            this._interpreter._parallelCommonEvent = this;
+        }
+        const list = NMHN.PPM.Game_CommonEvent_list.call(this);
+        const waitCommand = { code: 230, indent: 0, parameters: [delay] };
+        return list.concat([waitCommand]);
+    };
 })();
